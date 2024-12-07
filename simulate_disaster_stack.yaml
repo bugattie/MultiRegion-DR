@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "CloudFormation template to simulate disaster in active region"
+
+Metadata:
+  Author: "Mohsin Sheikhani"
+
+Parameters:
+  RegionName:
+    Type: String
+    Description: The name of the region.
+    Default: us-east-1
+
+Resources:
+  APIGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-SimulateDisasterApi"
+
+  APIGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt APIGatewayRestApi.RootResourceId
+      PathPart: "simulate-disaster"
+      RestApiId: !Ref APIGatewayRestApi
+
+  APIGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref APIGatewayRestApi
+      ResourceId: !Ref APIGatewayResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SimulateDisasterFunction.Arn}/invocations"
+
+  APIGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - APIGatewayMethod
+    Properties:
+      RestApiId: !Ref APIGatewayRestApi
+      StageName: "dev"
+
+  LambdaPermissionForApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SimulateDisasterFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${APIGatewayRestApi}/*/POST/simulate-disaster"
+
+  LambdaExecutionRoleToUpdateASG:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+  LambdaExecutionRolePolicyToUpdateASG:
+    Type: AWS::IAM::Policy
+    Properties:
+      Roles:
+        - !Ref LambdaExecutionRoleToUpdateASG
+      PolicyName: LambdaExecutionRolePolicyToUpdateASG
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LambdaExecutionRolePolicy
+            Effect: Allow
+            Action:
+              - autoscaling:UpdateAutoScalingGroup
+            Resource:
+              - !ImportValue AutoScalingGroupArn
+            Condition:
+              StringEqualsIfExists:
+                aws:SourceArn: !GetAtt SimulateDisasterFunction.Arn
+
+  SimulateDisasterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-SimulateDisaster"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRoleToUpdateASG.Arn
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 128
+      Environment:
+        Variables:
+          ASG_NAME: !ImportValue AutoScalingGroupName
+          REGION_NAME: !Ref RegionName
+      Code:
+        ZipFile: |
+          """
+            This lambda function will simulate the disaster event by updating the ASG instance capacity to 0.
+          """
+
+          import boto3
+          import os
+
+          def lambda_handler(event, context):
+              region = os.getenv('REGION_NAME')
+              asg_client = boto3.client('autoscaling', region_name=region)
+              asg_name = os.getenv('ASG_NAME')
+
+              try:
+                  asg_client.update_auto_scaling_group(
+                      AutoScalingGroupName=asg_name,
+                      MinSize=0,
+                      DesiredCapacity=0
+                  )
+
+                  print(f"ASG '{asg_name}' reset: MinSize and DesiredCapacity set to 0.")
+                  return {
+                      'status': 'success',
+                      'message': 'ASG reset successfully.'
+                  }
+              except Exception as error:
+                  print(f"Error resetting ASG: {error}")
+                  return {
+                      'status': 'error',
+                      'message': str(error)
+                  }
+
+Outputs:
+  SimulateDisasterApiEndpoint:
+    Description: "The endpoint of the Simulate Disaster API"
+    Value: !Sub "https://${APIGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/dev/simulate-disaster"

@@ -1,0 +1,379 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "CloudFormation template for Multi-Region Disaster Recovery - Pilot Light (Standby Region)"
+
+Metadata:
+  Author: "Mohsin Sheikhani"
+
+Parameters:
+  AvailabilityZones:
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    Description: The list of Availability Zones to use for the subnets in the VPC.
+    Default: ap-southeast-1a,ap-southeast-1b
+
+  VPCName:
+    Type: String
+    Description: The name of the VPC.
+    Default: standby-region-vpc
+
+  VPCCidr:
+    Type: String
+    Description: The CIDR block for the VPC.
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/16-28
+    Default: 10.0.0.0/16
+
+  ImageId:
+    Type: String
+    Description: ImageId for EC2 Instance
+    Default: ami-0f935a2ecd3a7bd5c
+
+  # PrimaryDBIdentifier:
+  #   Type: String
+  #   Description: The identifier of the primary db instance
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Ref VPCName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${VPCName}-InternetGateway"
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${VPCName}-PublicRouteTable"
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/26
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Public Subnet 1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/26
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: Public Subnet 2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/26
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Private Subnet 1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/26
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: Private Subnet 2
+
+  # EC2S3AccessRole:
+  #   Type: AWS::IAM::Role
+  #   DependsOn: SecondaryBucket
+  #   Properties:
+  #     RoleName: !Sub "${AWS::StackName}-InstanceRoleToAccessS3"
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: Allow
+  #           Action: "sts:AssumeRole"
+  #           Principal:
+  #             Service: "ec2.amazonaws.com"
+  #     Policies:
+  #       - PolicyName: EC2S3AccessPolicy
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - "s3:GetObject"
+  #                 - "s3:PutObject"
+  #                 - "s3:ListBucket"
+  #               Resource:
+  #                 - !Sub "arn:aws:s3:::${SecondaryBucket}"
+  #                 - !Sub "arn:aws:s3:::${SecondaryBucket}/*"
+
+  # EC2InstanceProfile:
+  #   Type: AWS::IAM::InstanceProfile
+  #   Properties:
+  #     Path: "/"
+  #     Roles:
+  #       - !Ref EC2S3AccessRole
+
+  # LaunchTemplate:
+  #   Type: AWS::EC2::LaunchTemplate
+  #   Properties:
+  #     LaunchTemplateName: MyEC2LaunchTemplate
+  #     LaunchTemplateData:
+  #       InstanceType: t2.micro
+  #       ImageId: !Ref ImageId
+  #       NetworkInterfaces:
+  #         - AssociatePublicIpAddress: true
+  #           DeviceIndex: 0
+  #           Groups:
+  #             - !Ref EC2SecurityGroup
+  #       IamInstanceProfile:
+  #         Arn: !GetAtt EC2InstanceProfile.Arn
+  #       TagSpecifications:
+  #         - ResourceType: instance
+  #           Tags:
+  #             - Key: Name
+  #               Value: MyAutoScalingEC2Instance
+  #       UserData:
+  #         Fn::Base64: !Sub |
+  #           #!/bin/bash
+  #           yum update -y
+  #           yum install -y httpd
+  #           systemctl start httpd
+  #           systemctl enable httpd
+
+  #           # Get instance metadata
+  #           TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+  #           PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4`
+  #           REGION=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region`
+
+  #           # Create HTML page
+  #           cat <<EOF > /var/www/html/index.html
+  #           <!DOCTYPE html>
+  #           <html>
+  #           <head>
+  #               <title>EC2 Instance Information</title>
+  #               <style>
+  #                   body {
+  #                       font-family: Arial, sans-serif;
+  #                       margin: 40px;
+  #                       background-color: #f0f0f0;
+  #                   }
+  #                   .container {
+  #                       background-color: white;
+  #                       padding: 20px;
+  #                       border-radius: 8px;
+  #                       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  #                       max-width: 600px;
+  #                       margin: 0 auto;
+  #                   }
+  #                   h1 {
+  #                       color: #232f3e;
+  #                       text-align: center;
+  #                   }
+  #                   .info {
+  #                       margin: 20px 0;
+  #                       padding: 10px;
+  #                       background-color: #eef;
+  #                       border-radius: 4px;
+  #                   }
+  #               </style>
+  #           </head>
+  #           <body>
+  #               <div class="container">
+  #                   <h1>EC2 Instance Information</h1>
+  #                   <div class="info">
+  #                       <p><strong>Public IP:</strong> $PUBLIC_IP</p>
+  #                       <p><strong>Region:</strong> $REGION</p>
+  #                   </div>
+  #               </div>
+  #           </body>
+  #           </html>
+  #           EOF
+
+  #           # Set permissions
+  #           chmod 644 /var/www/html/index.html
+
+  # EC2SecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Allow HTTP traffic from ALB
+  #     VpcId: !Ref VPC
+  #     SecurityGroupIngress:
+  #       - IpProtocol: tcp
+  #         FromPort: 80
+  #         ToPort: 80
+  #         SourceSecurityGroupId: !Ref ALBSecurityGroup # Allow HTTP traffic from ALB
+  #     SecurityGroupEgress:
+  #       - IpProtocol: -1
+  #         FromPort: -1
+  #         ToPort: -1
+  #         CidrIp: 0.0.0.0/0
+
+  # AutoScalingGroup:
+  #   Type: AWS::AutoScaling::AutoScalingGroup
+  #   Properties:
+  #     VPCZoneIdentifier:
+  #       - !Ref PublicSubnet1
+  #       - !Ref PublicSubnet2
+  #     LaunchTemplate:
+  #       LaunchTemplateId: !Ref LaunchTemplate
+  #       Version: !GetAtt LaunchTemplate.LatestVersionNumber
+  #     MinSize: 0
+  #     MaxSize: 3
+  #     DesiredCapacity: 0
+  #     HealthCheckType: EC2
+  #     TargetGroupARNs:
+  #       - !Ref ALBTargetGroup # Register instances with ALB target group
+  #     Tags:
+  #       - Key: Name
+  #         Value: MyAutoScalingInstance
+  #         PropagateAtLaunch: true
+  #     MetricsCollection:
+  #       - Granularity: "1Minute"
+
+  # ScalingPolicy:
+  #   Type: AWS::AutoScaling::ScalingPolicy
+  #   Properties:
+  #     AutoScalingGroupName: !Ref AutoScalingGroup
+  #     PolicyType: TargetTrackingScaling
+  #     TargetTrackingConfiguration:
+  #       PredefinedMetricSpecification:
+  #         PredefinedMetricType: ASGAverageCPUUtilization
+  #       TargetValue: 50.0
+
+  # ALBSecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Allow HTTP traffic for the ALB
+  #     VpcId: !Ref VPC
+  #     SecurityGroupIngress:
+  #       - IpProtocol: tcp
+  #         FromPort: 80
+  #         ToPort: 80
+  #         CidrIp: 0.0.0.0/0
+  #     Tags:
+  #       - Key: Name
+  #         Value: ALB-SG
+
+  # ALBTargetGroup:
+  #   Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  #   Properties:
+  #     Name: MultiRegionDR-TG
+  #     VpcId: !Ref VPC
+  #     Port: 80
+  #     Protocol: HTTP
+  #     TargetType: instance
+  #     HealthCheckProtocol: HTTP
+  #     HealthCheckPath: /
+  #     Tags:
+  #       - Key: Name
+  #         Value: MultiRegionDR-TG
+
+  # ApplicationLoadBalancer:
+  #   Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+  #   Properties:
+  #     Name: MultiRegionDR-ALB
+  #     Subnets:
+  #       - !Ref PublicSubnet1
+  #       - !Ref PublicSubnet2
+  #     SecurityGroups:
+  #       - !Ref ALBSecurityGroup
+  #     Scheme: internet-facing
+  #     Tags:
+  #       - Key: Name
+  #         Value: MultiRegionDR-ALB
+
+  # ALBListener:
+  #   Type: AWS::ElasticLoadBalancingV2::Listener
+  #   Properties:
+  #     LoadBalancerArn: !Ref ApplicationLoadBalancer
+  #     Protocol: HTTP
+  #     Port: 80
+  #     DefaultActions:
+  #       - Type: forward
+  #         TargetGroupArn: !Ref ALBTargetGroup
+
+  SecondaryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  # RDSReadReplica1:
+  #   Type: AWS::RDS::DBInstance
+  #   Properties:
+  #     DBInstanceClass: db.t3.micro
+  #     Engine: mysql
+  #     SourceDBInstanceIdentifier: !Ref PrimaryDBIdentifier
+  #     AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+  #     Tags:
+  #       - Key: Name
+  #         Value: ReadReplicaInstance1
+
+  # RDSReadReplica2:
+  #   Type: AWS::RDS::DBInstance
+  #   Properties:
+  #     DBInstanceClass: db.t3.micro
+  #     Engine: mysql
+  #     SourceDBInstanceIdentifier: !Ref PrimaryDBIdentifier
+  #     AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+  #     Tags:
+  #       - Key: Name
+  #         Value: ReadReplicaInstance2
+
+Outputs:
+  SecondaryBucketName:
+    Value: !Ref SecondaryBucket
+    Export:
+      Name: SecondaryBucketName
