@@ -130,6 +130,62 @@ Resources:
                       'message': str(error)
                   }
 
+  DetectDisasterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: DetectDisasterAlarm
+      AlarmDescription: Alarm to detect disaster
+      Namespace: AWS/AutoScaling
+      MetricName: GroupInServiceInstances
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Threshold: 0
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Minimum
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !ImportValue AutoScalingGroupName
+      AlarmActions:
+        - !GetAtt RestoreInfrastructureFunction.Arn
+
+  LambdaExecutionRoleRestoreInfrastructureFunction:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+  RestoreInfrastructureFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-RestoreInfrastructure"
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRoleRestoreInfrastructureFunction.Arn
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          """
+            This lambda function will simulate the disaster event by updating the ASG instance capacity to 0.
+          """
+          def lambda_handler(event, context):
+            print(f"Lambda invocation by CloudWatch '{event}'")
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RestoreInfrastructureFunction
+      Action: lambda:InvokeFunction
+      Principal: lambda.alarms.cloudwatch.amazonaws.com
+      SourceArn: !GetAtt DetectDisasterAlarm.Arn
+
 Outputs:
   SimulateDisasterApiEndpoint:
     Description: "The endpoint of the Simulate Disaster API"
