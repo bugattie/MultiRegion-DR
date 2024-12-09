@@ -11,6 +11,16 @@ Parameters:
     Description: The name of the region.
     Default: us-east-1
 
+  BucketName:
+    Type: String
+    Description: The name of the bucket where the template resides.
+    Default: multi-region-dr-template-bucket
+
+  TemplateUrl:
+    Type: String
+    Description: Url of the restore template
+    Default: https://multi-region-dr-template-bucket.s3.us-east-1.amazonaws.com/restore.yaml
+
 Resources:
   APIGatewayRestApi:
     Type: AWS::ApiGateway::RestApi
@@ -161,6 +171,52 @@ Resources:
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
+  LambdaExecutionPolicyToRestoreInfrastructure:
+    Type: AWS::IAM::Policy
+    Properties:
+      Roles:
+        - !Ref LambdaExecutionRoleRestoreInfrastructureFunction
+      PolicyName: LambdaExecutionPolicyToRestoreInfrastructure
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "cloudformation:CreateStack"
+              - "cloudformation:DescribeStacks"
+              - "cloudformation:UpdateStack"
+            Resource: !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/*"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+          - Effect: Allow
+            Action:
+              - "iam:PassRole"
+            Resource: "*"
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudFormationResourceCreationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:*
+                  - autoscaling:*
+                  - elasticloadbalancing:*
+                Resource: "*"
+
   RestoreInfrastructureFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -170,13 +226,48 @@ Resources:
       Runtime: python3.9
       Timeout: 300
       MemorySize: 128
+      Environment:
+        Variables:
+          TEMPLATE_URL: !Ref TemplateUrl
+          ROLE_ARN: !GetAtt CloudFormationExecutionRole.Arn
       Code:
         ZipFile: |
           """
-            This lambda function will simulate the disaster event by updating the ASG instance capacity to 0.
+            This lambda function will create the infrastructure stack on-demand.
           """
+          import boto3
+          import json
+          import os
+
           def lambda_handler(event, context):
-            print(f"Lambda invocation by CloudWatch '{event}'")
+            try:
+              target_region = "us-east-2"
+              
+              template_url = os.getenv('TEMPLATE_URL')
+              
+              cf_client = boto3.client("cloudformation", region_name=target_region)
+
+              stack_name = "RestoreInfrastructureStack"
+
+              response = cf_client.create_stack(
+                  StackName=stack_name,
+                  TemplateURL=template_url,
+                  Capabilities=["CAPABILITY_NAMED_IAM"],
+                  RoleARN=os.getenv('ROLE_ARN')
+              )
+
+              print(f"Stack creation initiated: {response}")
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps(f"Stack creation initiated: {response}")
+              }
+            
+            except Exception as e:
+              print(f"Error creating stack: {str(e)}")
+              return {
+                  "statusCode": 500,
+                  "body": json.dumps(f"Error: {str(e)}")
+              }
 
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
