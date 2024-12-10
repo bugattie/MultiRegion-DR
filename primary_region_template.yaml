@@ -265,7 +265,7 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId: !Ref LaunchTemplate
         Version: !GetAtt LaunchTemplate.LatestVersionNumber
-      MinSize: 1
+      MinSize: 2
       MaxSize: 3
       DesiredCapacity: 2
       HealthCheckType: EC2
@@ -422,43 +422,43 @@ Resources:
               StringEquals:
                 aws:SourceVpc: !Ref VPC # Only allow requests from within the VPC
 
-  # DBSubnetGroup:
-  #   Type: AWS::RDS::DBSubnetGroup
-  #   Properties:
-  #     DBSubnetGroupDescription: "Private subnets for RDS"
-  #     SubnetIds:
-  #       - !Ref PrivateSubnet1
-  #       - !Ref PrivateSubnet2
-  #     Tags:
-  #       - Key: Name
-  #         Value: PrivateSubnetGroup
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Private subnets for RDS"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: PrivateSubnetGroup
 
   # MasterUsername: !Sub "{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:MyRDSSecret:SecretString:username}}"
   # MasterUserPassword: !Sub "{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:MyRDSSecret:SecretString:password}}"
 
-  # PrimaryRDSInstance:
-  #   Type: AWS::RDS::DBInstance
-  #   Properties:
-  #     DBInstanceClass: db.t3.micro
-  #     Engine: mysql
-  #     MasterUsername: admin
-  #     MasterUserPassword: password123
-  #     DBSubnetGroupName: !Ref DBSubnetGroup
-  #     MultiAZ: true
-  #     AllocatedStorage: 20
-  #     BackupRetentionPeriod: 7
-  #     StorageType: gp2
+  PrimaryRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      MasterUsername: admin
+      MasterUserPassword: password123
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      MultiAZ: true
+      AllocatedStorage: 20
+      BackupRetentionPeriod: 7
+      StorageType: gp2
 
-  # RDSReadReplica:
-  #   Type: AWS::RDS::DBInstance
-  #   Properties:
-  #     DBInstanceClass: db.t3.micro
-  #     Engine: mysql
-  #     SourceDBInstanceIdentifier: !Ref PrimaryRDSInstance
-  #     AvailabilityZone: !Select [1, !Ref AvailabilityZones]
-  #     Tags:
-  #       - Key: Name
-  #         Value: ReadReplicaInstance
+  RDSReadReplica:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      SourceDBInstanceIdentifier: !Ref PrimaryRDSInstance
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: ReadReplicaInstance
 
 Outputs:
   AutoScalingGroupName:
@@ -470,3 +470,7 @@ Outputs:
     Value: !Sub "arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AutoScalingGroup}"
     Export:
       Name: AutoScalingGroupArn
+
+  PrimaryDBIdentifier:
+    Description: The identifier of the primary DB instance.
+    Value: !Ref PrimaryRDSInstance

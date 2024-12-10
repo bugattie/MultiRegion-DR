@@ -1,26 +1,63 @@
-aws cloudformation deploy --template-file ./standby.yaml --region ap-southeast-1 --stack-name standby-region-stack --capabilities CAPABILITY_NAMED_IAM
+#!/bin/bash
 
-export SecondaryBucket=$(aws cloudformation describe-stacks \
-    --stack-name standby-region-stack \
-    --query "Stacks[0].Outputs[?OutputKey=='SecondaryBucketName'].OutputValue" \
-    --output text \
-    --region ap-southeast-1)
-echo $SecondaryBucket
+# Set region variables
+PRIMARY_REGION="us-east-1"
+SECONDARY_REGION="us-east-2"
 
-aws cloudformation deploy --template-file ./primary.yaml --stack-name active-region-stack --capabilities CAPABILITY_NAMED_IAM --parameter-overrides SecondaryBucketName=$SecondaryBucket
+# CloudFormation templates
+PRIMARY_TEMPLATE="primary_region_template.yaml"
+SECONDARY_TEMPLATE="secondary_region_template.yaml"
 
-export PrimaryRegionReplicationRoleArn=$(aws cloudformation describe-stacks \
-    --stack-name active-region-stack \
-    --query "Stacks[0].Outputs[?OutputKey=='ReplicationRoleArn'].OutputValue" \
-    --output text \
-    --region us-east-1)
-echo $PrimaryRegionReplicationRoleArn
+# Stack names
+PRIMARY_STACK_NAME="PrimaryRegionStack"
+SECONDARY_STACK_NAME="SecondaryRegionStack"
 
-export PrimaryDBIdentifier=$(aws cloudformation describe-stacks \
-    --stack-name active-region-stack \
-    --query "Stacks[0].Outputs[?OutputKey=='PrimaryDBIdentifier'].OutputValue" \
-    --output text \
-    --region us-east-1)
-echo $PrimaryDBIdentifier
+# Deploy secondary region (standby bucket)
+echo "Deploying secondary region infrastructure..."
+aws cloudformation deploy \
+  --region $SECONDARY_REGION \
+  --stack-name $SECONDARY_STACK_NAME \
+  --template-file $SECONDARY_TEMPLATE \
+  --parameter-overrides \
+      PrimaryDBIdentifier="" \
+  --capabilities CAPABILITY_NAMED_IAM
 
-aws cloudformation deploy --template-file ./standby.yaml --region ap-southeast-1 --stack-name standby-region-stack --capabilities CAPABILITY_NAMED_IAM --parameter-overrides PrimaryDBIdentifier=$PrimaryDBIdentifier
+  # Fetch secondary bucket name
+SECONDARY_BUCKET_NAME=$(aws cloudformation describe-stacks \
+  --region $SECONDARY_REGION \
+  --stack-name $SECONDARY_STACK_NAME \
+  --query "Stacks[0].Outputs[?OutputKey=='SecondaryS3Bucket'].OutputValue" \
+  --output text)
+
+echo "Secondary S3 bucket: $SECONDARY_BUCKET_NAME"
+
+# Deploy primary region (full infrastructure)
+echo "Deploying primary region infrastructure..."
+aws cloudformation deploy \
+  --region $PRIMARY_REGION \
+  --stack-name $PRIMARY_STACK_NAME \
+  --template-file $PRIMARY_TEMPLATE \
+  --parameter-overrides \
+      SecondaryS3Bucket=$SECONDARY_BUCKET_NAME \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# Fetch primary DB identifier
+PRIMARY_DB_IDENTIFIER=$(aws cloudformation describe-stacks \
+  --region $PRIMARY_REGION \
+  --stack-name $PRIMARY_STACK_NAME \
+  --query "Stacks[0].Outputs[?OutputKey=='PrimaryDBIdentifier'].OutputValue" \
+  --output text)
+
+echo "Primary DB identifier: $PRIMARY_DB_IDENTIFIER"
+
+# Update secondary region with read replica
+echo "Updating secondary region with RDS read replica..."
+aws cloudformation deploy \
+  --region $SECONDARY_REGION \
+  --stack-name $SECONDARY_STACK_NAME \
+  --template-file $SECONDARY_TEMPLATE \
+  --parameter-overrides \
+      PrimaryDBIdentifier=$PRIMARY_DB_IDENTIFIER \
+  --capabilities CAPABILITY_NAMED_IAM
+
+echo "Deployment completed successfully!"

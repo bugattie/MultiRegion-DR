@@ -28,10 +28,6 @@ Parameters:
     Description: ImageId for EC2 Instance
     Default: ami-0c80e2b6ccb9ad6d1
 
-  # PrimaryDBIdentifier:
-  #   Type: String
-  #   Description: The identifier of the primary db instance
-
 Resources:
   VPC:
     Type: AWS::EC2::VPC
@@ -304,25 +300,3 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
-
-  # RDSReadReplica1:
-  #   Type: AWS::RDS::DBInstance
-  #   Properties:
-  #     DBInstanceClass: db.t3.micro
-  #     Engine: mysql
-  #     SourceDBInstanceIdentifier: !Ref PrimaryDBIdentifier
-  #     AvailabilityZone: !Select [0, !Ref AvailabilityZones]
-  #     Tags:
-  #       - Key: Name
-  #         Value: ReadReplicaInstance1
-
-  # RDSReadReplica2:
-  #   Type: AWS::RDS::DBInstance
-  #   Properties:
-  #     DBInstanceClass: db.t3.micro
-  #     Engine: mysql
-  #     SourceDBInstanceIdentifier: !Ref PrimaryDBIdentifier
-  #     AvailabilityZone: !Select [1, !Ref AvailabilityZones]
-  #     Tags:
-  #       - Key: Name
-  #         Value: ReadReplicaInstance2

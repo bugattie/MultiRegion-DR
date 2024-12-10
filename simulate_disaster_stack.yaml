@@ -215,6 +215,8 @@ Resources:
                   - ec2:*
                   - autoscaling:*
                   - elasticloadbalancing:*
+                  - "rds:PromoteReadReplica"
+                  - "rds:DescribeDBInstances"
                 Resource: "*"
 
   RestoreInfrastructureFunction:
@@ -247,7 +249,7 @@ Resources:
               
               cf_client = boto3.client("cloudformation", region_name=target_region)
 
-              stack_name = "RestoreInfrastructureStack"
+              stack_name = "RestoreInfrastructure"
 
               response = cf_client.create_stack(
                   StackName=stack_name,
