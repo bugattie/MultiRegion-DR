@@ -26,7 +26,7 @@ Parameters:
   ImageId:
     Type: String
     Description: ImageId for EC2 Instance
-    Default: ami-0c80e2b6ccb9ad6d1
+    Default: ami-036841078a4b68e14
 
 Resources:
   VPC:
@@ -144,15 +144,25 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            yum update -y
-            yum install -y httpd
-            systemctl start httpd
-            systemctl enable httpd
+
+            # Update package lists and upgrade
+            apt-get update -y
+            apt-get upgrade -y
+
+            # Install Apache web server
+            apt-get install -y apache2
+
+            # Start and enable Apache
+            systemctl start apache2
+            systemctl enable apache2
+
+            # Install necessary tools for metadata retrieval
+            apt-get install -y curl jq
 
             # Get instance metadata
-            TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
-            PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4`
-            REGION=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region`
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+            REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 
             # Create HTML page
             cat <<EOF > /var/www/html/index.html
@@ -200,6 +210,9 @@ Resources:
 
             # Set permissions
             chmod 644 /var/www/html/index.html
+
+            # Open HTTP port in UFW firewall (if using)
+            ufw allow 'Apache Full'
 
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup

@@ -26,9 +26,9 @@ Parameters:
   ImageId:
     Type: String
     Description: ImageId for EC2 Instance
-    Default: ami-012967cc5a8c9f891
+    Default: ami-0e2c8caa4b6378d8c
 
-  SecondaryBucketName:
+  SecondaryS3Bucket:
     Type: String
     Description: The name of the bucket in the secondary region for replication
 
@@ -183,15 +183,25 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            yum update -y
-            yum install -y httpd
-            systemctl start httpd
-            systemctl enable httpd
+
+            # Update package lists and upgrade
+            apt-get update -y
+            apt-get upgrade -y
+
+            # Install Apache web server
+            apt-get install -y apache2
+
+            # Start and enable Apache
+            systemctl start apache2
+            systemctl enable apache2
+
+            # Install necessary tools for metadata retrieval
+            apt-get install -y curl jq
 
             # Get instance metadata
-            TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
-            PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4`
-            REGION=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region`
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+            REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 
             # Create HTML page
             cat <<EOF > /var/www/html/index.html
@@ -240,6 +250,9 @@ Resources:
             # Set permissions
             chmod 644 /var/www/html/index.html
 
+            # Open HTTP port in UFW firewall (if using)
+            ufw allow 'Apache Full'
+
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -249,7 +262,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          SourceSecurityGroupId: !Ref ALBSecurityGroup # Allow HTTP traffic from ALB
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: -1
           FromPort: -1
@@ -270,7 +283,7 @@ Resources:
       DesiredCapacity: 2
       HealthCheckType: EC2
       TargetGroupARNs:
-        - !Ref ALBTargetGroup # Register instances with ALB target group
+        - !Ref ALBTargetGroup
       Tags:
         - Key: Name
           Value: MyAutoScalingInstance
@@ -358,7 +371,7 @@ Resources:
             Status: Enabled
             Prefix: ""
             Destination:
-              Bucket: !Sub "arn:aws:s3:::${SecondaryBucketName}"
+              Bucket: !Sub "arn:aws:s3:::${SecondaryS3Bucket}"
               StorageClass: STANDARD
 
   ReplicationRole:
@@ -402,7 +415,7 @@ Resources:
               - s3:ReplicateDelete
               - s3:ReplicateTags
             Resource:
-              - !Sub "arn:aws:s3:::${SecondaryBucketName}/*"
+              - !Sub "arn:aws:s3:::${SecondaryS3Bucket}/*"
 
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -420,7 +433,7 @@ Resources:
             Resource: !Sub "arn:aws:s3:::${PrimaryBucket}/*"
             Condition:
               StringEquals:
-                aws:SourceVpc: !Ref VPC # Only allow requests from within the VPC
+                aws:SourceVpc: !Ref VPC
 
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -471,6 +484,6 @@ Outputs:
     Export:
       Name: AutoScalingGroupArn
 
-  PrimaryDBIdentifier:
-    Description: The identifier of the primary DB instance.
-    Value: !Ref PrimaryRDSInstance
+  PrimaryDBARN:
+    Description: The ARN of the primary DB instance.
+    Value: !GetAtt PrimaryRDSInstance.DBInstanceArn

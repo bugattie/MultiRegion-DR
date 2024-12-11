@@ -185,6 +185,7 @@ Resources:
               - "cloudformation:CreateStack"
               - "cloudformation:DescribeStacks"
               - "cloudformation:UpdateStack"
+              - "cloudformation:DeleteStack"
             Resource: !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/*"
           - Effect: Allow
             Action:
@@ -234,42 +235,100 @@ Resources:
           ROLE_ARN: !GetAtt CloudFormationExecutionRole.Arn
       Code:
         ZipFile: |
-          """
-            This lambda function will create the infrastructure stack on-demand.
-          """
           import boto3
           import json
           import os
+          import time
+
+          cf_client = boto3.client("cloudformation")
+          rds_client = boto3.client("rds")
+          route53_client = boto3.client("route53")
+
+          TEMPLATE_URL = os.getenv("TEMPLATE_URL")
+          ROLE_ARN = os.getenv("ROLE_ARN")
+          READ_REPLICA_IDENTIFIER = os.getenv("READ_REPLICA_IDENTIFIER")
+          DNS_RECORD = os.getenv("DNS_RECORD")
+          HOSTED_ZONE_ID = os.getenv("HOSTED_ZONE_ID")
+          TARGET_REGION = os.getenv("TARGET_REGION", "us-east-2")
+
+          def promote_read_replica():
+              print(f"Promoting Read Replica: {READ_REPLICA_IDENTIFIER}")
+              rds_client.promote_read_replica(DBInstanceIdentifier=READ_REPLICA_IDENTIFIER)
+
+              # Wait until the instance is promoted
+              while True:
+                  response = rds_client.describe_db_instances(DBInstanceIdentifier=READ_REPLICA_IDENTIFIER)
+                  status = response["DBInstances"][0]["DBInstanceStatus"]
+                  print(f"Current status: {status}")
+                  if status == "available":
+                      print("Read Replica successfully promoted to primary.")
+                      break
+                  time.sleep(10)
+
+          def update_route53(primary_endpoint):
+              print(f"Updating Route53 record: {DNS_RECORD}")
+              secondary_record = {
+                  "Action": "UPSERT",
+                  "ResourceRecordSet": {
+                      "Name": DNS_RECORD,
+                      "Type": "A",  # or "CNAME" depending on your setup
+                      "SetIdentifier": "Secondary",
+                      "Failover": "SECONDARY",
+                      "TTL": 60,
+                      "ResourceRecords": [{"Value": secondary_endpoint}],
+                  },
+              }
+
+              route53_client.change_resource_record_sets(
+                  HostedZoneId=HOSTED_ZONE_ID,
+                  ChangeBatch={
+                      "Comment": "Failover configuration for multi-region setup",
+                      "Changes": [secondary_record],
+                  },
+              )
+              print("Route53 record updated successfully.")
+
+          def restore_infrastructure():
+              print(f"Starting stack creation in {TARGET_REGION}...")
+              response = cf_client.create_stack(
+                  StackName="RestoreInfrastructure",
+                  TemplateURL=TEMPLATE_URL,
+                  Capabilities=["CAPABILITY_NAMED_IAM"],
+                  RoleARN=ROLE_ARN
+              )
+              print(f"Stack creation initiated: {response}")
+              return response
 
           def lambda_handler(event, context):
-            try:
-              target_region = "us-east-2"
-              
-              template_url = os.getenv('TEMPLATE_URL')
-              
-              cf_client = boto3.client("cloudformation", region_name=target_region)
+              try:
+                  # Step 1: Restore infrastructure
+                  restore_response = restore_infrastructure()
+                  print(f"Infrastructure restore response: {restore_response}")
 
-              stack_name = "RestoreInfrastructure"
+                  # Step 2: Promote the read replica
+                  promote_read_replica()
 
-              response = cf_client.create_stack(
-                  StackName=stack_name,
-                  TemplateURL=template_url,
-                  Capabilities=["CAPABILITY_NAMED_IAM"],
-                  RoleARN=os.getenv('ROLE_ARN')
-              )
+                  # Step 3: Retrieve the new primary endpoint
+                  response = rds_client.describe_db_instances(DBInstanceIdentifier=READ_REPLICA_IDENTIFIER)
+                  primary_endpoint = response["DBInstances"][0]["Endpoint"]["Address"]
+                  print(f"New primary endpoint: {primary_endpoint}")
 
-              print(f"Stack creation initiated: {response}")
-              return {
-                  "statusCode": 200,
-                  "body": json.dumps(f"Stack creation initiated: {response}")
-              }
-            
-            except Exception as e:
-              print(f"Error creating stack: {str(e)}")
-              return {
-                  "statusCode": 500,
-                  "body": json.dumps(f"Error: {str(e)}")
-              }
+                  # Step 4: Update Route53 DNS record
+                  update_route53(primary_endpoint)
+
+                  return {
+                      "statusCode": 200,
+                      "body": json.dumps({
+                          "message": "Infrastructure restored and failover completed successfully."
+                      })
+                  }
+
+              except Exception as e:
+                  print(f"Error: {e}")
+                  return {
+                      "statusCode": 500,
+                      "body": json.dumps({"error": str(e)})
+                  }
 
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
